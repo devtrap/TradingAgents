@@ -263,8 +263,21 @@ class TradingAgentsGraph:
         explicit = self.config.get("benchmark_ticker")
         if explicit:
             return explicit
-        benchmark_map = self.config.get("benchmark_map", {})
         ticker_upper = ticker.upper()
+
+        # Non-equity instruments have no meaningful equity-index baseline: the
+        # excess return of a EUR/USD position over the S&P 500 is not a number
+        # anyone can act on, and it used to be written into the decision log and
+        # re-injected into later runs as a "lesson". Return None so the caller
+        # reports the raw return alone.
+        if (
+            ticker_upper.endswith(("=X", "=F"))
+            or ticker_upper.startswith("^")
+            or ticker_upper.endswith(("-USD", "-USDT", "-USDC", "-BTC", "-ETH"))
+        ):
+            return None
+
+        benchmark_map = self.config.get("benchmark_map", {})
         for suffix, benchmark in benchmark_map.items():
             if suffix and ticker_upper.endswith(suffix.upper()):
                 return benchmark
@@ -272,17 +285,19 @@ class TradingAgentsGraph:
 
     def _fetch_returns(
         self, ticker: str, trade_date: str, holding_days: int = 5,
-        benchmark: str = "SPY",
+        benchmark: str | None = "SPY",
     ) -> tuple[float | None, float | None, int | None, str | None]:
         """Fetch raw and alpha return for ticker over holding_days from trade_date.
 
         ``benchmark`` is the index used as the alpha baseline (resolved by the
-        caller via ``_resolve_benchmark``). Returns ``(raw_return, alpha_return,
-        holding_days, resolution_date)`` — where ``resolution_date`` is the date
-        of the last price bar used, i.e. when the outcome became known (#1251) —
-        or ``(None, None, None, None)`` when the outcome cannot be settled yet:
-        the full holding window has not traded (#1169), or the symbol is delisted
-        or unreachable.
+        caller via ``_resolve_benchmark``); ``None`` means this instrument has no
+        meaningful baseline (forex, commodities, indices, crypto), in which case
+        ``alpha_return`` comes back ``None`` and only the raw return is recorded.
+        Returns ``(raw_return, alpha_return, holding_days, resolution_date)`` —
+        where ``resolution_date`` is the date of the last price bar used, i.e.
+        when the outcome became known (#1251) — or ``(None, None, None, None)``
+        when the outcome cannot be settled yet: the full holding window has not
+        traded (#1169), or the symbol is delisted or unreachable.
         """
         from tradingagents.dataflows.symbol_utils import normalize_symbol
 
@@ -295,23 +310,27 @@ class TradingAgentsGraph:
             # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
             # already a canonical Yahoo symbol from ``_resolve_benchmark``.
             stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
-            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
-
-            # Require the full holding window in both series. A rerun before it
-            # has traded leaves the entry pending to retry next run, rather than
-            # settling on a premature partial return (#1169).
-            if len(stock) <= holding_days or len(bench) <= holding_days:
+            if len(stock) <= holding_days:
                 return None, None, None, None
 
             raw = float(
                 (stock["Close"].iloc[holding_days] - stock["Close"].iloc[0])
                 / stock["Close"].iloc[0]
             )
-            bench_ret = float(
-                (bench["Close"].iloc[holding_days] - bench["Close"].iloc[0])
-                / bench["Close"].iloc[0]
-            )
-            alpha = raw - bench_ret
+
+            alpha = None
+            if benchmark:
+                bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
+                # Require the full holding window in both series. A rerun before
+                # it has traded leaves the entry pending to retry next run,
+                # rather than settling on a premature partial return (#1169).
+                if len(bench) <= holding_days:
+                    return None, None, None, None
+                bench_ret = float(
+                    (bench["Close"].iloc[holding_days] - bench["Close"].iloc[0])
+                    / bench["Close"].iloc[0]
+                )
+                alpha = raw - bench_ret
             # The date of the last price bar used is when this outcome became
             # known — the point-in-time cutoff for injecting the lesson (#1251).
             resolution_date = stock.index[holding_days].strftime("%Y-%m-%d")
@@ -427,6 +446,17 @@ class TradingAgentsGraph:
                 company_name, trade_date, asset_type=asset_type,
                 checkpoint_thread_id=thread_id_value,
             )
+
+    def resolve_pending(self, ticker: str) -> None:
+        """Resolve any pending memory-log entries for ticker without a new run.
+
+        ``propagate()`` only resolves a ticker's pending entries as a side
+        effect of its *next* call for that ticker, so the final decision of a
+        sequence (e.g. the last date in a backtest) has no subsequent call to
+        trigger it. Callers that loop ``propagate()`` over a date range should
+        call this once per ticker after the loop.
+        """
+        self._resolve_pending_entries(ticker)
 
     def begin_checkpoint(self, company_name, trade_date, asset_type: str = "stock") -> str | None:
         """Recompile the graph with a per-ticker checkpointer and return the

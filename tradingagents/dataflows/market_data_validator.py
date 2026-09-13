@@ -17,6 +17,30 @@ from stockstats import wrap
 
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
 
+
+def _load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Load bars from whichever vendor is configured for core stock data.
+
+    The verification snapshot is the analyst's declared source of truth, so it
+    must read the SAME feed the price tools read. It used to call the yfinance
+    loader unconditionally, which meant a run configured for another vendor got
+    broker prices from its tools and Yahoo prices from its verifier — and the
+    prompt tells the model to flag exactly that discrepancy. On forex and CFDs
+    the two feeds never agree, so the mismatch was constant.
+
+    ``load_ohlcv`` stays a module-level name so it remains the patch point the
+    existing tests use.
+    """
+    from tradingagents.dataflows.config import get_config
+
+    vendors = get_config().get("data_vendors", {}).get("core_stock_apis", "")
+    if "metatrader" in vendors:
+        from tradingagents.dataflows.metatrader import load_mt5_ohlcv
+
+        return load_mt5_ohlcv(symbol, curr_date)
+    return load_ohlcv(symbol, curr_date)
+
+
 # A fixed, common indicator set so the snapshot is the same shape every run.
 DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
     "close_10_ema", "close_50_sma", "close_200_sma",
@@ -32,7 +56,7 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     look-ahead rows, but we re-apply the cutoff defensively — this is a
     verification path, so it must not trust its input to be pre-filtered.
     """
-    data = load_ohlcv(symbol, curr_date)
+    data = _load_ohlcv(symbol, curr_date)
     if data is None or data.empty:
         raise ValueError(f"No OHLCV data available for {symbol}.")
 

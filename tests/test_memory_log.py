@@ -704,6 +704,14 @@ class TestDeferredReflection:
         assert len(log.get_pending_entries()) == 1  # still pending
         mock_reflector.reflect_on_final_decision.assert_not_called()
 
+    def test_resolve_pending_delegates_to_resolve_pending_entries(self):
+        """resolve_pending() is the public entry point a caller (e.g. a
+        backtest loop) uses to settle a ticker's final decision without
+        starting a new propagate() run."""
+        mock_graph = MagicMock(spec=TradingAgentsGraph)
+        TradingAgentsGraph.resolve_pending(mock_graph, "NVDA")
+        mock_graph._resolve_pending_entries.assert_called_once_with("NVDA")
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Manager injection: past_context in state and prompt

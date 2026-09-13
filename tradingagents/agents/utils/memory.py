@@ -132,8 +132,8 @@ class TradingMemoryLog:
         blocks = text.split(self._SEPARATOR)
 
         pending_prefix = f"[{trade_date} | {ticker} |"
-        raw_pct = f"{raw_return:+.1%}"
-        alpha_pct = f"{alpha_return:+.1%}"
+        raw_pct = self._pct(raw_return)
+        alpha_pct = self._pct(alpha_return)
 
         updated = False
         new_blocks = []
@@ -205,8 +205,8 @@ class TradingMemoryLog:
                 if tag_line.startswith(pending_prefix) and tag_line.endswith("| pending]"):
                     fields = [f.strip() for f in tag_line[1:-1].split("|")]
                     rating = fields[2]
-                    raw_pct = f"{upd['raw_return']:+.1%}"
-                    alpha_pct = f"{upd['alpha_return']:+.1%}"
+                    raw_pct = self._pct(upd["raw_return"])
+                    alpha_pct = self._pct(upd.get("alpha_return"))
                     new_tag = self._resolved_tag(
                         trade_date, ticker, rating, raw_pct, alpha_pct,
                         upd["holding_days"], upd.get("resolution_date"),
@@ -229,6 +229,16 @@ class TradingMemoryLog:
         tmp_path.replace(self._log_path)
 
     # --- Helpers ---
+
+    @staticmethod
+    def _pct(value) -> str:
+        """Format a return as a signed percentage, or ``n/a`` when absent.
+
+        ``alpha_return`` is None for instruments with no meaningful equity-index
+        baseline (forex, commodities, indices, crypto), so the tag records the
+        raw return alone rather than a fabricated excess return.
+        """
+        return "n/a" if value is None else f"{value:+.1%}"
 
     @staticmethod
     def _resolved_tag(

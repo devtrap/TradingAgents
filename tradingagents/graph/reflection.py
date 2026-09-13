@@ -32,8 +32,8 @@ class Reflector:
         self,
         final_decision: str,
         raw_return: float,
-        alpha_return: float,
-        benchmark_name: str = "SPY",
+        alpha_return: float | None,
+        benchmark_name: str | None = "SPY",
     ) -> str:
         """Single reflection call on the final trade decision with outcome context.
 
@@ -42,16 +42,27 @@ class Reflector:
         ``benchmark_name`` is the label used for the alpha line (e.g. ``"SPY"``
         for US tickers, ``"^N225"`` for ``.T`` listings); defaults to SPY for
         callers that haven't been updated to thread the benchmark through.
+
+        ``benchmark_name``/``alpha_return`` of ``None`` mean the instrument has
+        no meaningful equity-index baseline (forex, commodities, indices,
+        crypto). The alpha line is then omitted entirely rather than shown
+        against an unrelated index — the system prompt asks the model to cite the
+        alpha figure, and an irrelevant one invites a spurious lesson.
         """
+        if alpha_return is None or not benchmark_name:
+            outcome = (
+                f"Raw return: {raw_return:+.1%}\n"
+                f"(No benchmark applies to this instrument — judge the call on "
+                f"the raw return alone and do not cite an alpha figure.)\n\n"
+            )
+        else:
+            outcome = (
+                f"Raw return: {raw_return:+.1%}\n"
+                f"Alpha vs {benchmark_name}: {alpha_return:+.1%}\n\n"
+            )
+
         messages = [
             ("system", self.log_reflection_prompt),
-            (
-                "human",
-                (
-                    f"Raw return: {raw_return:+.1%}\n"
-                    f"Alpha vs {benchmark_name}: {alpha_return:+.1%}\n\n"
-                    f"Final Decision:\n{final_decision}"
-                ),
-            ),
+            ("human", outcome + f"Final Decision:\n{final_decision}"),
         ]
         return self.quick_thinking_llm.invoke(messages).content

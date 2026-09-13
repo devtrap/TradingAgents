@@ -5,7 +5,7 @@ import questionary
 from dotenv import find_dotenv, set_key
 from rich.console import Console
 
-from cli.models import AnalystType, AssetType
+from cli.models import NON_EQUITY_ASSET_TYPES, AnalystType, AssetType
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import get_model_options
 
@@ -21,6 +21,15 @@ ANALYST_ORDER = [
 ]
 
 CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
+
+# Classification runs on the *canonical* symbol, after normalize_symbol has
+# resolved broker names to Yahoo's convention. Yahoo's own conventions are the
+# signal: ``=X`` is a spot forex pair, ``=F`` a futures contract (which is how
+# metals and energy reach us — ``XAUUSD`` normalizes to ``GC=F``), and a leading
+# ``^`` an index (``US500`` -> ``^GSPC``).
+FOREX_SUFFIXES = ("=X",)
+COMMODITY_SUFFIXES = ("=F",)
+INDEX_PREFIXES = ("^",)
 
 
 def is_valid_ticker_input(value: str) -> bool:
@@ -80,17 +89,33 @@ def normalize_ticker_symbol(ticker: str) -> str:
 
 def detect_asset_type(ticker: str) -> AssetType:
     """Classify on the canonical symbol so e.g. BTCUSD and BTC-USDT both read as
-    crypto (#981/#982), matching what the data path will actually fetch."""
+    crypto (#981/#982), matching what the data path will actually fetch.
+
+    Forex, commodity and index instruments are classified too, so the pipeline
+    stops treating a currency pair or a gold CFD as if it were a listed company.
+    """
     canonical = normalize_ticker_symbol(ticker)
     if canonical.endswith(CRYPTO_SUFFIXES):
         return AssetType.CRYPTO
+    if canonical.endswith(FOREX_SUFFIXES):
+        return AssetType.FOREX
+    if canonical.endswith(COMMODITY_SUFFIXES):
+        return AssetType.COMMODITY
+    if canonical.startswith(INDEX_PREFIXES):
+        return AssetType.INDEX
     return AssetType.STOCK
 
 
 def filter_analysts_for_asset_type(
     analysts: list[AnalystType], asset_type: AssetType
 ) -> list[AnalystType]:
-    if asset_type != AssetType.CRYPTO:
+    """Drop the Fundamentals Analyst for instruments that have no issuer.
+
+    Previously only crypto was filtered, so a forex pair or a metals CFD still
+    ran a full balance-sheet / cash-flow / insider-filing analyst that could only
+    ever return the NO_DATA sentinel.
+    """
+    if asset_type not in NON_EQUITY_ASSET_TYPES:
         return analysts
     return [
         analyst

@@ -49,8 +49,17 @@ def test_ticker_input_validation(value, ok):
     ("BTC-USD", AssetType.CRYPTO),
     ("ETHUSD", AssetType.CRYPTO),
     ("AAPL", AssetType.STOCK),
-    ("GC=F", AssetType.STOCK),
     ("600519.SS", AssetType.STOCK),
+    # Non-equity classes. These used to fall through to STOCK, which ran a
+    # Fundamentals Analyst against an instrument with no issuer and benchmarked
+    # the outcome against SPY.
+    ("GC=F", AssetType.COMMODITY),      # XAUUSD normalizes here
+    ("XAUUSD", AssetType.COMMODITY),
+    ("CL=F", AssetType.COMMODITY),
+    ("EURUSD", AssetType.FOREX),        # -> EURUSD=X
+    ("GBPJPY", AssetType.FOREX),
+    ("^GSPC", AssetType.INDEX),
+    ("US500", AssetType.INDEX),         # -> ^GSPC
 ])
 def test_detect_asset_type(raw, expected):
     assert detect_asset_type(raw) == expected
